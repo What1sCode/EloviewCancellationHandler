@@ -1,7 +1,14 @@
+console.log('🚀 Starting Zendesk EV Cancellation Handler...');
+console.log('Node version:', process.version);
+console.log('Environment:', process.env.NODE_ENV);
+console.log('Port:', process.env.PORT);
+
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const app = express();
+
+console.log('✅ All modules loaded successfully');
 
 // Configuration
 const ZENDESK_DOMAIN = 'https://elotouchcare.zendesk.com';
@@ -583,11 +590,19 @@ app.get('/health', (req, res) => {
 
 // Start server
 const PORT = process.env.PORT || 3001; // Different port from the welcome app
+
+console.log('🔧 Attempting to start server on port:', PORT);
+
 app.listen(PORT, () => {
-  console.log(`Zendesk EV Cancellation Handler running on port ${PORT}`);
-  console.log(`Webhook endpoint: http://localhost:${PORT}/webhook/zendesk`);
-  console.log(`Manual processing: http://localhost:${PORT}/process-ticket/{ticketId}`);
-  console.log(`Target criteria: Tag="${TARGET_TAG}" AND Subject contains "${TARGET_SUBJECT}"`);
+  console.log(`✅ Zendesk EV Cancellation Handler running on port ${PORT}`);
+  console.log(`🌐 Webhook endpoint: http://localhost:${PORT}/webhook/zendesk`);
+  console.log(`🔧 Manual processing: http://localhost:${PORT}/process-ticket/{ticketId}`);
+  console.log(`🎯 Target criteria: Tag="${TARGET_TAG}" AND Subject contains "${TARGET_SUBJECT}"`);
+}).on('error', (err) => {
+  console.error('❌ Server failed to start:', err);
+  process.exit(1);
 });
+
+console.log('📝 Server setup complete, waiting for connections...');
 
 module.exports = app;
