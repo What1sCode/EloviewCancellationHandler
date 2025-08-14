@@ -1,13 +1,3 @@
-// Polyfill what undici expects on Node 18
-try {
-  const { File, FormData, Blob } = require('undici');
-  globalThis.File ??= File;
-  globalThis.FormData ??= FormData;
-  globalThis.Blob ??= Blob;
-} catch (_) {
-  // undici not present / not needed
-}
-
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
