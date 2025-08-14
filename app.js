@@ -61,15 +61,20 @@ function extractContactInfo(ticketContent) {
         switch (label) {
           case 'First Name':
             contactInfo.firstName = value;
+            console.log(`✅ Set firstName: "${value}"`);
             break;
           case 'Last Name':
             contactInfo.lastName = value;
+            console.log(`✅ Set lastName: "${value}"`);
             break;
           case 'Company Email':
+          case 'Email':
             contactInfo.email = value;
+            console.log(`✅ Set email: "${value}"`);
             break;
           case 'Phone':
             contactInfo.phone = value;
+            console.log(`✅ Set phone: "${value}"`);
             break;
         }
       }
@@ -86,16 +91,17 @@ function extractContactInfo(ticketContent) {
     if (emailMatch) contactInfo.email = emailMatch[1];
     if (phoneMatch) contactInfo.phone = phoneMatch[1].trim();
 
-    // Method 3: Look for any email pattern in the content
+    // Method 3: Look for any email pattern in the content (but be more inclusive)
     if (!contactInfo.email) {
       const emailPattern = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
       const emails = ticketContent.match(emailPattern);
       if (emails && emails.length > 0) {
-        // Filter out system emails
+        // Filter out obvious system emails but keep customer emails
         const userEmail = emails.find(email => 
-          !email.includes('elotouch.com') && 
           !email.includes('zendesk.com') &&
-          !email.includes('noreply')
+          !email.includes('noreply') &&
+          !email.includes('support@elotouch.com') &&
+          !email.includes('roger.rhodes@elotouch.com')
         );
         if (userEmail) {
           contactInfo.email = userEmail;
