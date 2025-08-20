@@ -18,7 +18,7 @@
     "cancellation",
     "webhook"
   ],
-  "author": "Your Name",
+  "author": "Roger Rhodes",
   "license": "ISC",
   "dependencies": {
     "express": "^4.18.2",
