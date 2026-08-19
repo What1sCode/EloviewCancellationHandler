@@ -13,8 +13,8 @@ console.log('✅ All modules loaded successfully');
 
 // Configuration - USE ENVIRONMENT VARIABLES
 const ZENDESK_DOMAIN = process.env.ZENDESK_DOMAIN || 'https://elotouchcare.zendesk.com';
-const API_TOKEN = process.env.ZENDESK_API_TOKEN;
-const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL;
+const OAUTH_CLIENT_ID = process.env.ZENDESK_OAUTH_CLIENT_ID;
+const OAUTH_CLIENT_SECRET = process.env.ZENDESK_OAUTH_CLIENT_SECRET;
 const WEBHOOK_SECRET = process.env.ZENDESKEVC_WEBHOOK_SECRET;
 const ADMIN_SECRET = process.env.ADMIN_SECRET;
 const TARGET_TAG = 'ev_cancellation';
@@ -25,8 +25,8 @@ const TARGET_GROUP_ID = process.env.TARGET_GROUP_ID || '31112854673047'; // TS -
 
 // Validate required environment variables on startup
 const requiredEnvVars = {
-  ZENDESK_API_TOKEN: API_TOKEN,
-  ZENDESK_EMAIL: ZENDESK_EMAIL,
+  ZENDESK_OAUTH_CLIENT_ID: OAUTH_CLIENT_ID,
+  ZENDESK_OAUTH_CLIENT_SECRET: OAUTH_CLIENT_SECRET,
   ZENDESKEVC_WEBHOOK_SECRET: WEBHOOK_SECRET,
   ADMIN_SECRET: ADMIN_SECRET
 };
@@ -91,17 +91,64 @@ app.use(express.json({
   }
 }));
 
+// OAuth token cache — client_credentials grant has no refresh token,
+// so we just re-request a new one when the cached one is close to expiring.
+let cachedToken = null;
+let tokenExpiresAt = 0;
+const TOKEN_REFRESH_BUFFER_MS = 60000; // refresh 60s before actual expiry
+
+async function getAccessToken() {
+  if (cachedToken && Date.now() < tokenExpiresAt) {
+    return cachedToken;
+  }
+
+  const response = await axios.post(`${ZENDESK_DOMAIN}/oauth/tokens`, {
+    grant_type: 'client_credentials',
+    client_id: OAUTH_CLIENT_ID,
+    client_secret: OAUTH_CLIENT_SECRET,
+    scope: 'tickets:read tickets:write users:read users:write macros:read'
+  });
+
+  cachedToken = response.data.access_token;
+  tokenExpiresAt = Date.now() + (response.data.expires_in * 1000) - TOKEN_REFRESH_BUFFER_MS;
+
+  return cachedToken;
+}
+
+function invalidateAccessToken() {
+  cachedToken = null;
+  tokenExpiresAt = 0;
+}
+
 // Helper function to create authenticated Zendesk API headers
-function getZendeskHeaders() {
-  // Try different authentication methods
-  const authString = Buffer.from(`${ZENDESK_EMAIL}/token:${API_TOKEN}`).toString('base64');
-  
+async function getZendeskHeaders() {
+  const token = await getAccessToken();
+
   return {
     'Content-Type': 'application/json',
-    'Authorization': `Basic ${authString}`
-    // Alternative: 'X-API-Key': API_TOKEN
+    'Authorization': `Bearer ${token}`
   };
 }
+
+// If a token expires early or is revoked mid-flight, retry once with a fresh one
+// instead of failing the request outright. All axios calls in this file target Zendesk.
+axios.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const config = error.config;
+    const isUnauthorized = error.response && error.response.status === 401;
+    const isTokenEndpoint = config && config.url && config.url.includes('/oauth/tokens');
+
+    if (isUnauthorized && !isTokenEndpoint && config && !config._retriedOAuth) {
+      config._retriedOAuth = true;
+      invalidateAccessToken();
+      config.headers['Authorization'] = `Bearer ${await getAccessToken()}`;
+      return axios(config);
+    }
+
+    return Promise.reject(error);
+  }
+);
 
 // Extract contact information from ticket content
 function extractContactInfo(ticketContent) {
@@ -200,7 +247,7 @@ async function findUserByEmail(email) {
   try {
     const response = await axios.get(
       `${ZENDESK_DOMAIN}/api/v2/users/search.json?query=email:${encodeURIComponent(email)}`,
-      { headers: getZendeskHeaders() }
+      { headers: await getZendeskHeaders() }
     );
     
     return response.data.users.length > 0 ? response.data.users[0] : null;
@@ -268,7 +315,7 @@ async function createUser(contactInfo) {
     const response = await axios.post(
       `${ZENDESK_DOMAIN}/api/v2/users/create_or_update.json`,
       userData,
-      { headers: getZendeskHeaders() }
+      { headers: await getZendeskHeaders() }
     );
 
     console.log('Created/updated user:', response.data.user.id);
@@ -302,7 +349,7 @@ async function updateTicketRequestor(ticketId, userId) {
     const response = await axios.put(
       `${ZENDESK_DOMAIN}/api/v2/tickets/${ticketId}.json`,
       updateData,
-      { headers: getZendeskHeaders() }
+      { headers: await getZendeskHeaders() }
     );
 
     console.log(`Updated ticket ${ticketId} with requestor ${userId} and assigned to group`);
@@ -333,7 +380,7 @@ async function closeTicket(ticketId) {
     const response = await axios.put(
       `${ZENDESK_DOMAIN}/api/v2/tickets/${ticketId}.json`,
       updateData,
-      { headers: getZendeskHeaders() }
+      { headers: await getZendeskHeaders() }
     );
 
     console.log(`Closed ticket ${ticketId}`);
@@ -351,7 +398,7 @@ async function verifyMacro(macroId) {
   try {
     const response = await axios.get(
       `${ZENDESK_DOMAIN}/api/v2/macros/${macroId}.json`,
-      { headers: getZendeskHeaders() }
+      { headers: await getZendeskHeaders() }
     );
     
     console.log(`Macro ${macroId} exists: "${response.data.macro.title}"`);
@@ -370,7 +417,7 @@ async function applyMacro(ticketId, macroId) {
     // First, get the macro to see what it contains
     const macroResponse = await axios.get(
       `${ZENDESK_DOMAIN}/api/v2/macros/${macroId}.json`,
-      { headers: getZendeskHeaders() }
+      { headers: await getZendeskHeaders() }
     );
     
     const macro = macroResponse.data.macro;
@@ -382,7 +429,7 @@ async function applyMacro(ticketId, macroId) {
       
       const executeResponse = await axios.get(
         `${ZENDESK_DOMAIN}/api/v2/tickets/${ticketId}/macros/${macroId}/apply.json`,
-        { headers: getZendeskHeaders() }
+        { headers: await getZendeskHeaders() }
       );
       
       // Now apply the result
@@ -393,7 +440,7 @@ async function applyMacro(ticketId, macroId) {
         const applyResponse = await axios.put(
           `${ZENDESK_DOMAIN}/api/v2/tickets/${ticketId}.json`,
           { ticket: result.ticket },
-          { headers: getZendeskHeaders() }
+          { headers: await getZendeskHeaders() }
         );
         
         console.log(`✅ Successfully executed and applied macro ${macroId} to ticket ${ticketId}`);
@@ -455,7 +502,7 @@ async function applyMacro(ticketId, macroId) {
     const response = await axios.put(
       `${ZENDESK_DOMAIN}/api/v2/tickets/${ticketId}.json`,
       updateData,
-      { headers: getZendeskHeaders() }
+      { headers: await getZendeskHeaders() }
     );
     
     console.log(`✅ Successfully applied macro ${macroId} actions to ticket ${ticketId}`);
@@ -476,7 +523,7 @@ async function getTicketDetails(ticketId) {
   try {
     const response = await axios.get(
       `${ZENDESK_DOMAIN}/api/v2/tickets/${ticketId}.json?include=comments`,
-      { headers: getZendeskHeaders() }
+      { headers: await getZendeskHeaders() }
     );
     
     return response.data.ticket;
@@ -655,7 +702,7 @@ app.get('/test-macro/:macroId', verifyAdminSecret, async (req, res) => {
 
     const response = await axios.get(
       `${ZENDESK_DOMAIN}/api/v2/macros/${macroId}.json`,
-      { headers: getZendeskHeaders() }
+      { headers: await getZendeskHeaders() }
     );
 
     const macro = response.data.macro;
